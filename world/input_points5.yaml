@@ -1,0 +1,6 @@
+#TODO change input points on rviz
+room1_entrance_xy: [0.421, -0.591]
+room2_entrance_xy: [-1.5, -0.417]
+room1_centre_xy: [0.851, -1.72]
+room2_centre_xy: [-0.61, -1.54]
+

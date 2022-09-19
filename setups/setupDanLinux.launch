@@ -1,0 +1,14 @@
+<launch>
+    <arg name="gui"     default="true"/>
+    <arg name="world_file"  default="/root/world_files/coursework/project.world"/>
+    <arg name="map_file"    default="/root/world_files/coursework/map/project_map.yaml"/>
+    
+    <include file="$(find turtlebot_gazebo)/launch/turtlebot_world.launch">
+        <arg name="gui"         value="$(arg gui)"/>
+        <arg name="world_file"      value="$(arg world_file)"/>
+    </include>
+    <include file="/root/world_files/coursework/simulated_localisation.launch">
+        <arg name="map_file"        value="$(arg map_file)"/>
+    </include>
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find turtlebot_rviz_launchers)/rviz/navigation.rviz"/>
+</launch>

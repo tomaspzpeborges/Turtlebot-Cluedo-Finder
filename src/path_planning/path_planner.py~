@@ -1,0 +1,190 @@
+#!/usr/bin/env python
+
+
+import rospy
+import numpy as np
+from os.path import expanduser
+from utilities.yaml_reader import Yaml
+from utilities.colour_detector import ColourDetector
+from utilities.distance_locator import DistanceLocator
+from utilities.robot import Robot
+from utilities.camera import Camera
+from utilities.math_conversions import MathConversions
+from utilities.point import Point
+from geometry_msgs.msg import Twist
+from operator import attrgetter
+
+
+constants = {
+    'yaml_file': '{}'
+                 '/catkin_ws/src/group_project/world/input_points.yaml'
+                 .format(expanduser('~')),
+    'yaml_keys': [
+        'room1_entrance_xy',
+        'room1_centre_xy',
+        'room2_entrance_xy',
+        'room2_centre_xy'
+        ]
+}
+
+
+def room_valid(x, y, theta):
+    turtlebot = Robot()
+    success = turtlebot.move_to_location(x, y, theta)
+    if success:
+        green_detector = ColourDetector(np.array([70, 100, 30]),
+                                        np.array([70, 255, 255]),
+                                        turtlebot.stop_robot)
+        turtlebot.rotate_robot(
+            MathConversions.degress_to_radians(
+                72), 50, green_detector.is_colour_detected
+        )
+        if green_detector.colour_detected is False:
+            green_detector.unregister_subscriber()
+            return False
+        else:
+            return True
+    else:
+        return False
+
+
+def calculate_rotation_speed(rate, seconds, total_rotation):
+    target_time = rate * seconds
+    z_component = total_rotation / seconds
+    return target_time, MathConversions.degress_to_radians(z_component)
+
+
+def generate_average_distances_from_rotation(seconds, total_rotation,
+                                             use_colour):
+    rate_hz = 10
+    turtlebot = Robot(rate_hz)
+    average_points_list = list()
+    rate = rospy.Rate(rate_hz)
+    distance_obj = DistanceLocator()
+
+    twist = Twist()
+    velocity_pub = rospy.Publisher(
+            'mobile_base/commands/velocity',
+            Twist, queue_size=10
+    )
+
+    target_time_rotation, twist.angular.z = calculate_rotation_speed(
+        rate_hz, seconds, total_rotation
+    )
+    if use_colour is True:
+        green_detector = ColourDetector(np.array([70, 100, 30]),
+                                        np.array([70, 255, 255]))
+    rospy.sleep(1)
+
+    for i in range(target_time_rotation):
+        velocity_pub.publish(twist)
+        rate.sleep()
+        current_quaternion = turtlebot.get_robot_orientation()
+        current_distance = distance_obj.average_distance
+        if use_colour is True:
+            if green_detector.colour_detected is True:
+                average_points_list.append(Point(current_quaternion,
+                                                 current_distance))
+        else:
+            average_points_list.append(Point(current_quaternion,
+                                             current_distance))
+    if use_colour is True:
+        green_detector.unregister_subscriber()
+    twist.angular.z = 0
+
+    min_avg_point = min(average_points_list,
+                        key=attrgetter('distance'))
+
+    target_quaternion = min_avg_point.quaternion
+    min_avg_distance = min_avg_point.distance
+
+    euler_of_target_quaternion = MathConversions.quaternions_to_euler(
+        target_quaternion.x, target_quaternion.y,
+        target_quaternion.z, target_quaternion.w
+    )
+    angle_in_degrees_of_euler_target =\
+        MathConversions.radians_to_degrees(euler_of_target_quaternion[2])
+
+    return(angle_in_degrees_of_euler_target, min_avg_distance)
+
+
+def room_metrics(input_file_path, seconds, use_colour=True, total_rotation=360):
+    rospy.init_node('path_planner', anonymous=True)
+
+    ROOM_ONE_ENTRANCE = constants['yaml_keys'][0]
+    ROOM_ONE_CENTER = constants['yaml_keys'][1]
+
+    ROOM_TWO_ENTRANCE = constants['yaml_keys'][2]
+    ROOM_TWO_CENTER = constants['yaml_keys'][3]
+
+    theta = 0
+    points = None
+
+    min_angle_in_degrees = None
+    min_avg_distance = None
+    correct_entrance = None
+    correct_center = None
+
+    try:
+        yaml_object = Yaml(input_file_path)
+        points = yaml_object.get_yaml_data()
+    except Exception as e:
+        rospy.loginfo(e)
+
+    if points is not None:
+        Camera()
+
+        room_one_entrance_x, room_one_entrance_y = points[ROOM_ONE_ENTRANCE]
+        room_one_center_x, room_one_center_y = points[ROOM_ONE_CENTER]
+
+        room_two_entrance_x, room_two_entrance_y = points[ROOM_TWO_ENTRANCE]
+        room_two_center_x, room_two_center_y = points[ROOM_TWO_CENTER]
+
+        try:
+            if room_valid(room_one_entrance_x, room_one_entrance_y, theta):
+                #rospy.loginfo('I need d and angle of room 1')
+                min_angle_in_degrees, min_avg_distance\
+                    = generate_average_distances_from_rotation(
+                        seconds, total_rotation, use_colour
+                    )
+                correct_entrance = (room_one_entrance_x, room_one_entrance_y)
+                correct_center = (room_one_center_x, room_one_center_y)
+
+            elif room_valid(room_two_entrance_x, room_two_entrance_y, theta):
+                #rospy.loginfo('I need d and angle of room 2')
+                min_angle_in_degrees, min_avg_distance\
+                    = generate_average_distances_from_rotation(
+                        seconds, total_rotation, use_colour
+                    )
+                correct_entrance = (room_two_entrance_x, room_two_entrance_y)
+                correct_center = (room_two_center_x, room_two_center_y)
+
+            else:
+                rospy.loginfo('Error: neither rooms were valid.')
+        except rospy.ROSInterruptException:
+            rospy.loginfo('Ctrl-C caught. Quitting')
+    else:
+        rospy.loginfo('Could not read yaml file.')
+
+    rospy.sleep(1)
+    return (
+        correct_center,
+        correct_entrance,
+        min_angle_in_degrees,
+        min_avg_distance
+    )
+
+
+if __name__ == '__main__':
+    correct_center,\
+        correct_entrance,\
+        min_angle_in_degrees,\
+        min_avg_distance = room_metrics( constants['yaml_file'], 20)
+    rospy.loginfo('%s %s %s %s', correct_center, correct_entrance,
+                  min_angle_in_degrees, min_avg_distance)
+    '''
+    Takes in the seconds you want for a certain rotation and whether or not
+    you want to consider the points with or without colour.
+    True is where you want to calculate the average for points where the colour
+    exists and False is the opposite
+    '''
